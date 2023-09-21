@@ -78,13 +78,7 @@ fn encode_name(name: &str) -> Vec<u8> {
     for w in name.split(".") {
         let len_bytes = w.len().to_be_bytes().to_vec();
         c.extend(len_bytes.last());
-        // let s_bytes : Vec<u8>= w.as_bytes().try_into().unwrap();
-        let s = w.as_bytes().try_into();
-
-        let s_bytes : Vec<u8> = match s {
-           Ok(value)  => value,
-            Err(error) => panic!("Size to bytes failed: {:?}", error)
-        };
+        let s_bytes : Vec<u8>= w.as_bytes().try_into().unwrap();
         c.extend(s_bytes);
     }
 
@@ -137,14 +131,7 @@ fn main()  {
     // let (number_of_bytes, src) = socket.recv_from(&mut buf).expect("Didn't receive data");
     let (number_of_bytes, src) = socket.recv_from(&mut buf).unwrap();
     let filled_buf = &mut buf[..number_of_bytes];
-    println!("Converting data");
-    let ss = String::from_utf8(filled_buf.to_vec());
-    let o = match ss {
-        Ok(s) => s,
-        Err(error) => panic!("Result error: {:?}", error)
-    };
-
-    println!("{:?}", o);
+    println!("{:?}", filled_buf);
 }
 
 #[cfg(test)]
