@@ -136,17 +136,15 @@ fn main()  {
 
 #[cfg(test)]
 mod tests {
-    // use crate::encode_name;
-
     use crate::{build_query, encode_name, TYPE_A};
 
     #[test]
     fn test_encode_name() {
         let name = "google.com";
+        let expected_result: Vec<u8> = vec![6, 103, 111, 111, 103, 108, 101, 3, 99, 111, 109, 0];
         let result = encode_name(name);
-        // [6, 103, 111, 111, 103, 108, 101, 3, 99, 111, 109, 0]
-        // [6, 103, 111, 111, 103, 108, 101, 3, 99, 111, 109, 0]
-        println!("Result: {:?}", result);
+        assert_eq!(result, expected_result);
+        // println!("Result: {:?}", result);
     }
 
     #[test]
