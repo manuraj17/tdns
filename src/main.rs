@@ -175,11 +175,17 @@ impl DNSRecord {
     fn decode(reader: &mut BuffReader) -> DNSRecord {
         println!("Parsing DNSRecord");
         let name= decode_question_name(reader);
+        println!("Reader position: {:?}", reader.pos);
         let _type = u16::from_be_bytes(reader.read(2).try_into().unwrap());
         let _class = u16::from_be_bytes(reader.read(2).try_into().unwrap());
         let ttl = u32::from_be_bytes(reader.read(4).try_into().unwrap());
-        let data_len = usize::from_be_bytes(reader.read(2).try_into().unwrap());
-        let data: Vec<u8> = reader.read(data_len);
+        println!("Name: {:?}", name);
+        println!("Type : {:?}", _type);
+        println!("Class : {:?}", _class);
+        println!("TTL : {:?}", ttl);
+
+        let data_len = u8::from_be_bytes(reader.read(1).try_into().unwrap());
+        let data: Vec<u8> = reader.read(data_len as usize);
 
         DNSRecord {
             name,
@@ -236,10 +242,10 @@ fn decode_question_name_simple(reader: &mut BuffReader) -> String {
     let mut parts: Vec<Vec<u8>> = Vec::new();
 
     loop {
-        println!("D: #{:?}", reader.peek(1));
+        // println!("D: #{:?}", reader.peek(1));
         let mut d = reader.read(1);
-        println!("D: #{:?}", reader.peek(1));
-        println!("D: #{:?}", d);
+        // println!("D: #{:?}", reader.peek(1));
+        // println!("D: #{:?}", d);
 
         let mut t: Vec<u8> = Vec::new();
 
@@ -255,9 +261,9 @@ fn decode_question_name_simple(reader: &mut BuffReader) -> String {
     let mut s: Vec<String> = Vec::new();
 
     for p in parts {
-        println!("{:?}", p);
+        // println!("{:?}", p);
         let t =String::from_utf8(p).unwrap();
-        println!("{:?}", t);
+        // println!("{:?}", t);
         s.push(t);
     }
 
@@ -267,18 +273,26 @@ fn decode_question_name(reader: &mut BuffReader) -> String {
     // let mut parts: Vec<Vec<u8>> = Vec::new();
     let mut parts : Vec<String> = Vec::new();
 
+    // Magic Octet = 11000000 => 192
     while let Some(length) = Some(reader.read(1)[0]) {
-        println!("Length: {:?}", length);
+        println!("DQN Length: {:?}", length);
         if length != 0 {
             if ((length) & 0b11000000) != 0 {
+                println!("A pointer");
                 let r = decode_compressed_name(length, reader);
                 parts.push(r);
                 break;
             } else {
+                println!("Not a pointer");
                 let t = reader.read(length as usize);
                 println!("Parts: {:?}", parts);
                 println!("t: {:?}", t);
-                parts.push(String::from_utf8(t).unwrap());
+                if t[0] == 0 {
+                    // parts.push(String::from("0"));
+                    break;
+                } else {
+                    parts.push(String::from_utf8(t).unwrap());
+                }
             }
         }
     }
@@ -286,16 +300,75 @@ fn decode_question_name(reader: &mut BuffReader) -> String {
     parts.join(".")
 }
 
+// The pointer takes the form of a two octet sequence:
+//
+// +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+// | 1  1|                OFFSET                   |
+// +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+// Pointers
+// - The first two bits are ones
+// Labels
+// - label must begin with two zero bits because
+// - labels are restricted to 63 octets or less
+//
+// For example, a datagram might need to use the domain names F.ISI.ARPA,
+// FOO.F.ISI.ARPA, ARPA, and the root.  Ignoring the other fields of the
+// message, these domain names might be represented as:
+//
+//        +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+//     20 |           1           |           F           |
+//        +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+//     22 |           3           |           I           |
+//        +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+//     24 |           S           |           I           |
+//        +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+//     26 |           4           |           A           |
+//        +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+//     28 |           R           |           P           |
+//        +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+//     30 |           A           |           0           |
+//        +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+//
+//        +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+//     40 |           3           |           F           |
+//        +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+//     42 |           O           |           O           |
+//        +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+//     44 | 1  1|                20                       |
+//        +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+//
+//        +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+//     64 | 1  1|                26                       |
+//        +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+//
+//        +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+//     92 |           0           |                       |
+//        +--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+--+
+//
+// The domain name for F.ISI.ARPA is shown at offset 20.  The domain name
+// FOO.F.ISI.ARPA is shown at offset 40; this definition uses a pointer to
+// concatenate a label for FOO to the previously defined F.ISI.ARPA.  The
+// domain name ARPA is defined at offset 64 using a pointer to the ARPA
+// component of the name F.ISI.ARPA at 20; note that this pointer relies on
+// ARPA being the last label in the string at 20.  The root domain name is
+// defined by a single octet of zeros at 92; the root domain name has no
+// labels.
 fn decode_compressed_name(length: u8, reader: &mut BuffReader) -> String {
+    println!("Starting Decompression");
     // Take bottom 6 bits of the length byte and the next byte and convert
     // that to an integer called pointer
-    let pointer_bytes = (length & 0b0011_1111);
+    let six_bits = length & 0b00111111;
     let next_byte = reader.read(1);
     let converted_next_bytes: [u8;1] =  next_byte.try_into().unwrap();
-    let pointer = u16::from_be_bytes([pointer_bytes, converted_next_bytes[0]]);
+
+    let pointer_bytes = u16::from_be_bytes([six_bits, converted_next_bytes[0]]);
+    println!("Pointer Location: {:?}", pointer_bytes);
+
     let current_pos = reader.pos.clone();
-    reader.seek(pointer as usize);
+    println!("Save position {:?}", current_pos);
+    reader.seek(pointer_bytes as usize);
     let result = decode_question_name(reader);
+    println!("Seeking back to position");
     reader.seek(current_pos);
 
     result
@@ -331,7 +404,8 @@ impl BuffReader {
 }
 
 fn main() {
-    let name = "www.google.com";
+    // let name = "www.google.com";
+    let name = "www.youtube.com";
     let query = build_query(name, CLASS_IN);
 
     // let mut socket = UdpSocket::bind("0.0.0.0:8000").expect("Couldn't bind address");
@@ -344,7 +418,7 @@ fn main() {
     println!("{:?}", result);
 
     let mut buf = [0; 1024];
-    println!("Waiting for data");
+    // println!("Waiting for data");
     // let (number_of_bytes, src) = socket.recv_from(&mut buf).expect("Didn't receive data");
     let (number_of_bytes, _src) = socket.recv_from(&mut buf).unwrap();
     println!("Total bytes: {:?}", number_of_bytes);
