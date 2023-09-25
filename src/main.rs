@@ -4,6 +4,7 @@ use std::{
     net::{Ipv4Addr, UdpSocket},
     usize,
 };
+use std::panic::panic_any;
 
 // Whenever an octet represents a numeric quantity, the left most bit in
 // the diagram is the high order or most significant bit.  That is, the bit
@@ -172,6 +173,67 @@ struct DNSRecord {
 }
 
 impl DNSRecord {
+    fn ip_to_string(&self) -> String {
+        // self.data.join(".")
+        self
+            .data
+            .iter()
+            .map( |i| format!("{:?}", i))
+            .collect::<Vec<String>>()
+            .join(".")
+    }
+}
+
+#[repr(C)]
+#[derive(Debug)]
+struct DNSPacket {
+    header: DNSHeader,
+    questions: Vec<DNSQuestion>,
+    answers: Vec<DNSRecord>,
+    authorities: Vec<DNSRecord>,
+    additionals: Vec<DNSRecord>,
+}
+
+impl DNSPacket {
+    fn decode(reader: &mut BuffReader) -> DNSPacket{
+        let header = DNSHeader::decode(reader);
+        let mut questions : Vec<DNSQuestion> = Vec::new();
+        for i in 0..header.num_questions {
+            let q = DNSQuestion::decode(reader);
+            questions.push(q);
+        }
+
+        let mut answers : Vec<DNSRecord> = Vec::new();
+        for i in 0..header.num_answers {
+            let a = DNSRecord::decode(reader);
+            answers.push(a);
+        }
+
+        let mut authorities : Vec<DNSRecord> = Vec::new();
+        for i in 0..header.num_authorities {
+            let a = DNSRecord::decode(reader);
+            authorities.push(a);
+        }
+
+        let mut additionals : Vec<DNSRecord>  = Vec::new();
+        for i in 0..header.num_additionals {
+            let a = DNSRecord::decode(reader);
+            additionals.push(a);
+        }
+
+        DNSPacket {
+            header,
+            questions,
+            answers,
+            authorities,
+            additionals
+        }
+    }
+
+}
+
+
+impl DNSRecord {
     fn decode(reader: &mut BuffReader) -> DNSRecord {
         println!("Parsing DNSRecord");
         let name= decode_question_name(reader);
@@ -184,7 +246,10 @@ impl DNSRecord {
         println!("Class : {:?}", _class);
         println!("TTL : {:?}", ttl);
 
-        let data_len = u8::from_be_bytes(reader.read(1).try_into().unwrap());
+        let data_len = u16::from_be_bytes(reader.read(2).try_into().unwrap());
+        println!("Data Length: {:?}", data_len);
+        // TODO: Be careful here, the data_len is 2 bytes we are passing only 1
+        // u16 -> usize
         let data: Vec<u8> = reader.read(data_len as usize);
 
         DNSRecord {
@@ -404,8 +469,8 @@ impl BuffReader {
 }
 
 fn main() {
-    // let name = "www.google.com";
-    let name = "www.youtube.com";
+    let name = "www.google.com";
+    // let name = "www.youtube.com";
     let query = build_query(name, CLASS_IN);
 
     // let mut socket = UdpSocket::bind("0.0.0.0:8000").expect("Couldn't bind address");
@@ -424,36 +489,28 @@ fn main() {
     println!("Total bytes: {:?}", number_of_bytes);
     // let filled_buf = &mut buf[..number_of_bytes];
     let mut reader = BuffReader { buff: buf, pos: 0usize, count: 1usize };
+
+    let p = DNSPacket::decode(&mut reader);
+    println!("Packet: {:?}", p);
+    println!("IP: {:?}", p.answers[0].ip_to_string());
+
+    // Working
     // 12 bytes for header
-    // let mut counter: usize;
-    // let header : DNSHeader;
-
-    println!("Parsing Header");
-    // let header_buffer = reader.read(12usize);
-    // let header = DNSHeader::decode(&header_buffer);
-    let header = DNSHeader::decode(&mut reader);
-    println!("Header bytes: #{:?}", reader.count);
-    println!("{:?}", header);
-    // finding name dynamically
-
-    println!("Parsing Question");
-    // let question = DNSQuestion::decode(&filled_buf[(counter-1)..]);
-    let question = DNSQuestion::decode(&mut reader);
-    println!("{:?}", question);
-    println!("{:?}", question.name_s());
-    println!("Total Read: {:?}", reader.count);
-
-    println!("Parsing Record");
-    let record = DNSRecord::decode(&mut reader);
-    // let (bytes, record) = DNSRecord::decode(&filled_buf[(counter-1)..], counter);
-    // println!("{:?}", bytes);
-    println!("{:?}", record);
-    // let(bytes, name) = decode_name(&filled_buf[counter..]);
-    // println!("{:?}", name);
-    // println!("{:?}", bytes);
-    // let (question, counter) = DNSQuestion::
-    // let response_header = DNSHeader.decode()
-    // println!("{:?}", filled_buf);
+    // println!("Parsing Header");
+    // let header = DNSHeader::decode(&mut reader);
+    // println!("Header bytes: #{:?}", reader.count);
+    // println!("{:?}", header);
+    //
+    // println!("Parsing Question");
+    // let question = DNSQuestion::decode(&mut reader);
+    // println!("{:?}", question);
+    // println!("{:?}", question.name_s());
+    // println!("Total Read: {:?}", reader.count);
+    //
+    // println!("Parsing Record");
+    // let record = DNSRecord::decode(&mut reader);
+    // println!("{:?}", record);
+    // Working end
 }
 
 #[cfg(test)]
