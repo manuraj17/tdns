@@ -167,11 +167,11 @@ struct DNSRecord {
     _class: u16,
     ttl: u32,
     data: Vec<u8>,
+    parsed_data: String
 }
 
 impl DNSRecord {
     fn ip_to_string(&self) -> String {
-        // self.data.join(".")
         self
             .data
             .iter()
@@ -179,6 +179,14 @@ impl DNSRecord {
             .collect::<Vec<String>>()
             .join(".")
     }
+}
+
+fn ip_to_string(buff: Vec<u8>) -> String {
+       buff
+        .iter()
+        .map( |i| format!("{:?}", i))
+        .collect::<Vec<String>>()
+        .join(".")
 }
 
 #[repr(C)]
@@ -242,6 +250,16 @@ impl DNSRecord {
         // TODO: Be careful here, the data_len is 2 bytes we are passing only 1
         // u16 -> usize
         let data: Vec<u8> = reader.read(data_len as usize);
+        let parsed_data = String::from("");
+
+        // let parsed_data =
+        //     if _type == TYPE_NS {
+        //         decode_question_name(reader)
+        //     } else if _type == TYPE_A {
+        //         ip_to_string(data)
+        //     } else {
+        //       String::from("")
+        //     };
 
         DNSRecord {
             name,
@@ -249,6 +267,7 @@ impl DNSRecord {
             _class,
             ttl,
             data,
+            parsed_data
         }
     }
 }
@@ -269,12 +288,15 @@ fn encode_name(name: &str) -> Vec<u8> {
 }
 
 const TYPE_A: u16 = 1;
+const TYPE_NS: u16 = 2;
+const TYPE_TXT: u16 = 16;
 const CLASS_IN: u16 = 1;
 
 fn build_query(name: &str, record_type: u16) -> Vec<u8> {
     let encoded_name = encode_name(name);
     let id = rand::thread_rng().gen_range(0..65535);
-    let recursion_desired = 128;
+    // let recursion_desired = 128;
+    let recursion_desired = 0;
 
     let header = DNSHeader {
         id,
@@ -292,6 +314,24 @@ fn build_query(name: &str, record_type: u16) -> Vec<u8> {
     };
 
     [header.encode(), question.encode()].concat()
+}
+
+fn send_query(ip_address: &str, domain_name: &str, record_type: u16) -> DNSPacket {
+    let query = build_query(domain_name, record_type);
+    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).unwrap();
+    // .expect("Couldn't bind address");
+    let _result = socket
+        .send_to(&query, ip_address)
+        .expect("Couldn't send data");
+
+
+    let mut buf = [0; 1024];
+    // let (number_of_bytes, src) = socket.recv_from(&mut buf).expect("Didn't receive data");
+    let (_number_of_bytes, _src) = socket.recv_from(&mut buf).unwrap();
+    // let filled_buf = &mut buf[..number_of_bytes];
+    let mut reader = BuffReader { buff: buf, pos: 0usize, count: 1usize };
+
+    DNSPacket::decode(&mut reader)
 }
 
 fn decode_question_name_simple(reader: &mut BuffReader) -> String {
@@ -443,27 +483,63 @@ impl BuffReader {
     }
 }
 
+fn get_answer(packet: &DNSPacket) -> Vec<u8>{
+    for x in packet.answers.iter().into_iter() {
+        if x._type == TYPE_A {
+            return x.data.clone();
+        }
+    }
+
+    Vec::new()
+}
+
+fn get_nameserver(packet: &DNSPacket) -> String {
+    for x in packet.authorities.iter().into_iter() {
+        if x._type == TYPE_NS {
+            return x.ip_to_string();
+        }
+    }
+
+    String::from("")
+}
+
+fn resolve(domain_name: &str, record_type: u16) -> String {
+    let nameserver = "198.41.0.4:53";
+
+    loop {
+        println!("Querying {nameserver} for {domain_name}");
+        let packet = send_query(nameserver, domain_name, record_type);
+
+        let ip = get_answer(&packet);
+        if !ip.is_empty() {
+            return ip_to_string(ip)
+        }
+
+        let ns_ip = get_nameserver(&packet);
+        if ns_ip != "" {
+            return ns_ip
+        }
+
+        let ns_domain = get_nameserver(&packet);
+        if ns_domain != "" {
+            let nameserver = resolve(&ns_domain, TYPE_A);
+            return nameserver
+        }
+
+        panic!("Something went wrong")
+    }
+}
 fn main() {
-    let name = "www.google.com";
-    let query = build_query(name, CLASS_IN);
+    let name = "twitter.com";
+    let result = resolve(name, TYPE_A);
+    println!("IP: {:?}", result);
 
-    // let mut socket = UdpSocket::bind("0.0.0.0:8000").expect("Couldn't bind address");
-    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).unwrap();
-    // .expect("Couldn't bind address");
-    let _result = socket
-        .send_to(&query, "8.8.8.8:53")
-        .expect("Couldn't send data");
+    // let ip_address = "8.8.8.8:53";
+    // let ip_address = "198.41.0.4:53";
+    // let result = send_query(ip_address, name, TYPE_A);
 
 
-    let mut buf = [0; 1024];
-    // let (number_of_bytes, src) = socket.recv_from(&mut buf).expect("Didn't receive data");
-    let (_number_of_bytes, _src) = socket.recv_from(&mut buf).unwrap();
-    // let filled_buf = &mut buf[..number_of_bytes];
-    let mut reader = BuffReader { buff: buf, pos: 0usize, count: 1usize };
-
-    let p = DNSPacket::decode(&mut reader);
-    println!("Packet: {:?}", p);
-    println!("IP: {:?}", p.answers[0].ip_to_string());
+    // println!("IP: {:?}", result.answers);
 }
 
 #[cfg(test)]
