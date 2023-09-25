@@ -4,6 +4,14 @@ use std::{
     net::{Ipv4Addr, UdpSocket},
     usize,
 };
+use std::fs::read;
+use std::net::{IpAddr, Ipv6Addr};
+
+const TYPE_A: u16 = 1;
+const TYPE_NS: u16 = 2;
+const TYPE_TXT: u16 = 16;
+const CLASS_IN: u16 = 1;
+const TYPE_AAAA: u16 = 28;
 
 // Whenever an octet represents a numeric quantity, the left most bit in
 // the diagram is the high order or most significant bit.  That is, the bit
@@ -83,7 +91,7 @@ impl DNSHeader {
             self.num_authorities.to_be_bytes(),
             self.num_additionals.to_be_bytes(),
         ]
-        .concat()
+            .concat()
     }
 }
 
@@ -104,6 +112,7 @@ struct DNSQuestion {
     name: Vec<u8>,
     _type: u16,
     _class: u16,
+    name_s: String,
 }
 
 impl DNSQuestion {
@@ -111,15 +120,16 @@ impl DNSQuestion {
         String::from_utf8(self.name.clone()).unwrap()
     }
     fn decode(reader: &mut BuffReader) -> DNSQuestion {
-        let name = decode_question_name_simple(reader);
+        let name_s = decode_simple_question_name(reader);
 
         let _type = u16::from_be_bytes(reader.read(2).try_into().unwrap());
         let _class = u16::from_be_bytes(reader.read(2).try_into().unwrap());
 
         DNSQuestion {
-            name: name.as_bytes().to_vec(),
+            name: name_s.as_bytes().to_vec(),
             _type,
             _class,
+            name_s,
         }
     }
 
@@ -167,27 +177,72 @@ struct DNSRecord {
     _class: u16,
     ttl: u32,
     data: Vec<u8>,
-    parsed_data: String
+    parsed_data: String,
 }
 
 impl DNSRecord {
+    fn decode(reader: &mut BuffReader) -> DNSRecord {
+        // println!("Parsing DNSRecord");
+        // println!("{:?}", reader.peek(2));
+        let name = decode_compressed_question_name(reader);
+        // println!("Name: {name}");
+        let _type = u16::from_be_bytes(reader.read(2).try_into().unwrap());
+        let _class = u16::from_be_bytes(reader.read(2).try_into().unwrap());
+        let ttl = u32::from_be_bytes(reader.read(4).try_into().unwrap());
+        let data_len = u16::from_be_bytes(reader.read(2).try_into().unwrap());
+        // println!("Data length: {:?}", data_len);
+        // println!("TYPE: {:?}", _type);
+        // println!("Data Length: {:?}", data_len);
+        // TODO: Be careful here, the data_len is 2 bytes we are passing only 1
+        // u16 -> usize
+        let data: Vec<u8> = Vec::new();
+        // let data : Vec<u8>;
+        // let data: Vec<u8> = reader.read(data_len as usize);
+        // let parsed_data = String::from("");
+
+        let data =
+            if _type == TYPE_NS {
+                // println!("TYPE IS NS");
+                decode_compressed_question_name(reader).as_bytes().to_vec()
+            } else if _type == TYPE_A {
+                let data = reader.read(data_len as usize);
+                ip_to_string(data).as_bytes().to_vec()
+            } else if _type == TYPE_AAAA {
+                // println!("TYPE_AAAA: {:?}", data_len);
+                let data = reader.read(data_len as usize);
+                data
+                // String::from_utf8(data.clone()).unwrap()
+            } else {
+                String::from("").as_bytes().to_vec()
+            };
+        let parsed_data = if _type == TYPE_A {
+            String::from_utf8(data.clone()).unwrap()
+        } else {
+            String::from("")
+        };
+
+        // println!("Final parsed data: {:?}", parsed_data);
+
+        DNSRecord {
+            name,
+            _type,
+            _class,
+            ttl,
+            data,
+            parsed_data,
+        }
+    }
+
     fn ip_to_string(&self) -> String {
         self
             .data
             .iter()
-            .map( |i| format!("{:?}", i))
+            .map(|i| format!("{:?}", i))
             .collect::<Vec<String>>()
             .join(".")
     }
 }
 
-fn ip_to_string(buff: Vec<u8>) -> String {
-       buff
-        .iter()
-        .map( |i| format!("{:?}", i))
-        .collect::<Vec<String>>()
-        .join(".")
-}
 
 #[repr(C)]
 #[derive(Debug)]
@@ -200,29 +255,39 @@ struct DNSPacket {
 }
 
 impl DNSPacket {
-    fn decode(reader: &mut BuffReader) -> DNSPacket{
+    fn decode(reader: &mut BuffReader) -> DNSPacket {
         let header = DNSHeader::decode(reader);
-        let mut questions : Vec<DNSQuestion> = Vec::new();
+        let mut questions: Vec<DNSQuestion> = Vec::new();
+        // println!("Number of questions: {:?}", header.num_questions);
         for _ in 0..header.num_questions {
+            // println!("Parsing Question");
             let q = DNSQuestion::decode(reader);
+            // println!("Question {:?}", q);
             questions.push(q);
         }
 
-        let mut answers : Vec<DNSRecord> = Vec::new();
+        // println!("Parsing Answers");
+        // println!("Number of answers: {:?}", header.num_answers);
+        let mut answers: Vec<DNSRecord> = Vec::new();
         for _ in 0..header.num_answers {
             let a = DNSRecord::decode(reader);
             answers.push(a);
         }
 
-        let mut authorities : Vec<DNSRecord> = Vec::new();
+        // println!("Parsing Authorities");
+        // println!("Number of authorities: {:?}", header.num_authorities);
+        let mut authorities: Vec<DNSRecord> = Vec::new();
         for _ in 0..header.num_authorities {
             let a = DNSRecord::decode(reader);
             authorities.push(a);
         }
+        // println!("Authorities: {:?}", authorities);
 
-        let mut additionals : Vec<DNSRecord>  = Vec::new();
+        // println!("Parsing Additionals: {:?}", header.num_additionals);
+        let mut additionals: Vec<DNSRecord> = Vec::new();
         for _ in 0..header.num_additionals {
             let a = DNSRecord::decode(reader);
+            // println!("{:?}", a);
             additionals.push(a);
         }
 
@@ -231,45 +296,49 @@ impl DNSPacket {
             questions,
             answers,
             authorities,
-            additionals
+            additionals,
         }
     }
-
 }
 
 
-impl DNSRecord {
-    fn decode(reader: &mut BuffReader) -> DNSRecord {
-        // println!("Parsing DNSRecord");
-        let name= decode_question_name(reader);
-        let _type = u16::from_be_bytes(reader.read(2).try_into().unwrap());
-        let _class = u16::from_be_bytes(reader.read(2).try_into().unwrap());
-        let ttl = u32::from_be_bytes(reader.read(4).try_into().unwrap());
-        let data_len = u16::from_be_bytes(reader.read(2).try_into().unwrap());
-        // println!("Data Length: {:?}", data_len);
-        // TODO: Be careful here, the data_len is 2 bytes we are passing only 1
-        // u16 -> usize
-        let data: Vec<u8> = reader.read(data_len as usize);
-        let parsed_data = String::from("");
+struct BuffReader {
+    buff: [u8; 1024],
+    pos: usize,
+    count: usize,
+}
 
-        // let parsed_data =
-        //     if _type == TYPE_NS {
-        //         decode_question_name(reader)
-        //     } else if _type == TYPE_A {
-        //         ip_to_string(data)
-        //     } else {
-        //       String::from("")
-        //     };
+impl BuffReader {
+    ///
+    /// Arguments
+    /// * `count` - The amount of bytes to read
+    fn read(&mut self, count: usize) -> Vec<u8> {
+        let end_pos = self.pos + count;
 
-        DNSRecord {
-            name,
-            _type,
-            _class,
-            ttl,
-            data,
-            parsed_data
-        }
+        let result = self.buff[self.pos..end_pos].to_owned();
+
+        self.pos += count;
+        self.count += count;
+
+        result
     }
+
+    fn peek(&self, count: usize) -> Vec<u8> {
+        self.buff[self.pos..self.pos + count].to_vec()
+    }
+
+    fn seek(&mut self, pos: usize) -> () {
+        self.pos = pos;
+    }
+}
+
+
+fn ip_to_string(buff: Vec<u8>) -> String {
+    buff
+        .iter()
+        .map(|i| format!("{:?}", i))
+        .collect::<Vec<String>>()
+        .join(".")
 }
 
 fn encode_name(name: &str) -> Vec<u8> {
@@ -287,21 +356,16 @@ fn encode_name(name: &str) -> Vec<u8> {
     c
 }
 
-const TYPE_A: u16 = 1;
-const TYPE_NS: u16 = 2;
-const TYPE_TXT: u16 = 16;
-const CLASS_IN: u16 = 1;
-
 fn build_query(name: &str, record_type: u16) -> Vec<u8> {
     let encoded_name = encode_name(name);
     let id = rand::thread_rng().gen_range(0..65535);
     // let recursion_desired = 128;
-    let recursion_desired = 0;
+    let flags = 0;
 
     let header = DNSHeader {
         id,
         num_questions: 1,
-        flags: recursion_desired,
+        flags,
         num_answers: 0,
         num_authorities: 0,
         num_additionals: 0,
@@ -311,6 +375,7 @@ fn build_query(name: &str, record_type: u16) -> Vec<u8> {
         name: encoded_name,
         _type: record_type,
         _class: CLASS_IN,
+        name_s: String::from(name),
     };
 
     [header.encode(), question.encode()].concat()
@@ -334,7 +399,8 @@ fn send_query(ip_address: &str, domain_name: &str, record_type: u16) -> DNSPacke
     DNSPacket::decode(&mut reader)
 }
 
-fn decode_question_name_simple(reader: &mut BuffReader) -> String {
+/// Decode without compression
+fn decode_simple_question_name(reader: &mut BuffReader) -> String {
     let mut parts: Vec<Vec<u8>> = Vec::new();
 
     loop {
@@ -353,34 +419,66 @@ fn decode_question_name_simple(reader: &mut BuffReader) -> String {
     let mut s: Vec<String> = Vec::new();
 
     for p in parts {
-        let t =String::from_utf8(p).unwrap();
+        let t = String::from_utf8(p).unwrap();
         s.push(t);
     }
 
     s.join(".")
 }
-fn decode_question_name(reader: &mut BuffReader) -> String {
-    let mut parts : Vec<String> = Vec::new();
 
-    // Magic Octet = 11000000 => 192
-    while let Some(length) = Some(reader.read(1)[0]) {
-        if length != 0 {
-            if ((length) & 0b11000000) != 0 {
-                let r = decode_compressed_name(length, reader);
-                parts.push(r);
-                break;
-            } else {
-                let t = reader.read(length as usize);
-                if t[0] == 0 {
-                    // parts.push(String::from("0"));
-                    break;
-                } else {
-                    parts.push(String::from_utf8(t).unwrap());
-                }
-            }
+/// Decode with compression
+fn decode_compressed_question_name(reader: &mut BuffReader) -> String {
+    // println!("Decode compressed question name");
+    let mut parts: Vec<String> = Vec::new();
+
+    loop {
+        let length = reader.read(1)[0];
+        if length == 0 {
+            break;
+        }
+
+        // Magic Octet = 11000000 => 192
+        if ((length) & 0b11000000) != 0 {
+            let r = decode_compressed_name(length, reader);
+            // println!("Decompressed : {:?}", r);
+            parts.push(r);
+            break;
+        } else {
+            let t = reader.read(length as usize);
+            parts.push(String::from_utf8(t).unwrap());
         }
     }
+    // Magic Octet = 11000000 => 192
+    // while let Some(length) = Some(reader.read(1)[0]) {
+    //     println!("Length: {length}");
+    //     if length != 0 {
+    //         if ((length) & 0b11000000) != 0 {
+    //             let r = decode_compressed_name(length, reader);
+    //             println!("Decompressed : {:?}", r);
+    //             parts.push(r);
+    //             break;
+    //         } else {
+    //             let t = reader.read(length as usize);
+    //             println!("t: {:?}", t);
+    //             // parts.push(String::from_utf8(t).unwrap());
+    //             // if t[0] == 0 {
+    //             //     println!("Adding 0 and breaking");
+    //             //     // parts.push(String::from("0"));
+    //             //     break;
+    //             // } else {
+    //             //     println!("T: {:?}", t);
+    //             //     println!("String: {:?}", String::from_utf8(t.clone()).unwrap());
+    //             //     parts.push(String::from_utf8(t).unwrap());
+    //             // }
+    //         }
+    //     } else {
+    //         break;
+    //     }
+    // }
 
+    // reader.read(1);
+
+    // println!("Returning parts: {:?}", parts);
     parts.join(".")
 }
 
@@ -438,100 +536,107 @@ fn decode_question_name(reader: &mut BuffReader) -> String {
 // defined by a single octet of zeros at 92; the root domain name has no
 // labels.
 fn decode_compressed_name(length: u8, reader: &mut BuffReader) -> String {
+    // println!("Decoding compressed name");
     // Take bottom 6 bits of the length byte and the next byte and convert
     // that to an integer called pointer
     let six_bits = length & 0b00111111;
+    // println!("Bottom bits {:?}", six_bits);
     let next_byte = reader.read(1);
-    let converted_next_bytes: [u8;1] =  next_byte.try_into().unwrap();
+    let converted_next_bytes: [u8; 1] = next_byte.try_into().unwrap();
 
     let pointer_bytes = u16::from_be_bytes([six_bits, converted_next_bytes[0]]);
+    // println!("Pointer bytes: {:?}", pointer_bytes);
 
     let current_pos = reader.pos.clone();
     reader.seek(pointer_bytes as usize);
-    let result = decode_question_name(reader);
+    let result = decode_compressed_question_name(reader);
+    // println!("Seeking back");
     reader.seek(current_pos);
 
     result
 }
-struct BuffReader {
-    buff: [u8; 1024],
-    pos: usize,
-    count: usize
-}
 
-impl BuffReader {
-    ///
-    /// Arguments
-    /// * `count` - The amount of bytes to read
-    fn read(&mut self, count: usize) -> Vec<u8> {
-        let end_pos = self.pos + count;
-
-        let result = self.buff[self.pos..end_pos].to_owned();
-
-        self.pos += count;
-        self.count += count;
-
-        result
-    }
-
-    fn peek(&self, count: usize) -> Vec<u8>{
-        self.buff[self.pos..self.pos+count].to_vec()
-    }
-
-    fn seek(&mut self, pos: usize) -> (){
-        self.pos = pos;
-    }
-}
-
-fn get_answer(packet: &DNSPacket) -> Vec<u8>{
+fn get_answer(packet: &DNSPacket) -> String {
+    // println!("Getting answers");
     for x in packet.answers.iter().into_iter() {
+        // println!("TYPE: #{:?}", x._type);
         if x._type == TYPE_A {
-            return x.data.clone();
-        }
-    }
-
-    Vec::new()
-}
-
-fn get_nameserver(packet: &DNSPacket) -> String {
-    for x in packet.authorities.iter().into_iter() {
-        if x._type == TYPE_NS {
-            return x.ip_to_string();
+            return String::from_utf8(x.data.clone()).unwrap();
         }
     }
 
     String::from("")
 }
 
-fn resolve(domain_name: &str, record_type: u16) -> String {
-    let nameserver = "198.41.0.4:53";
+// String::from_utf8(x.data.clone()).unwrap()
+// println!("DNSRECORD: {:?}", x);
+// if x._type == TYPE_NS {
+//     // let result = decode_question_name_simple(x.data);
+//     // let mut v : Vec<String> = Vec::new();
+//     println!("Converted: {:?}", String::from_utf8(x.data.clone()));
+//     let array : [u8;16] = x.data.clone().try_into().unwrap();
+//     return IpAddr::from(array)
+fn get_nameserver(packet: &DNSPacket) -> String {
+    for x in packet.authorities.iter().into_iter() {
+        if x._type == TYPE_NS {
+            return String::from_utf8(x.data.clone()).unwrap();
+        }
+    }
+
+    String::from("")
+}
+
+fn get_nameserver_ip(packet: &DNSPacket) -> String {
+    for x in packet.additionals.iter().into_iter() {
+        if x._type == TYPE_A {
+            return x.parsed_data.clone();
+        }
+    }
+
+    String::from("")
+}
+
+fn resolve(domain_name: &str, nameserver: &str, record_type: u16) -> String {
+
 
     loop {
         println!("Querying {nameserver} for {domain_name}");
         let packet = send_query(nameserver, domain_name, record_type);
+        // println!("Packet: {:?}", packet);
+        // println!("Authorities: {:?}", packet.authorities);
 
         let ip = get_answer(&packet);
-        if !ip.is_empty() {
-            return ip_to_string(ip)
+        if ip != "" {
+            // println!("IP is not empty");
+            return ip;
         }
 
-        let ns_ip = get_nameserver(&packet);
+        let ns_ip = get_nameserver_ip(&packet);
         if ns_ip != "" {
-            return ns_ip
+            let p = format!("{}:53", ns_ip);
+            // println!("ns_ip is not empty: {p}");
+            let result = resolve(domain_name, &p, record_type);
+            return result;
         }
 
         let ns_domain = get_nameserver(&packet);
         if ns_domain != "" {
-            let nameserver = resolve(&ns_domain, TYPE_A);
-            return nameserver
+            // println!("NS Domain is not empty");
+            let nns_ip = resolve(&ns_domain, nameserver, TYPE_A);
+            let p = format!("{}:53", nns_ip);
+            // println!("Received ns: {p}");
+            let result = resolve(domain_name, &p, record_type);
+            return result;
         }
 
         panic!("Something went wrong")
     }
 }
+
 fn main() {
     let name = "twitter.com";
-    let result = resolve(name, TYPE_A);
+    let nameserver = "198.41.0.4:53";
+    let result = resolve(name, nameserver, TYPE_A);
     println!("IP: {:?}", result);
 
     // let ip_address = "8.8.8.8:53";
