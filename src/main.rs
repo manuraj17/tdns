@@ -556,7 +556,6 @@ fn resolve(domain_name: &str, nameserver: &str, record_type: u16) -> String {
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    println!("{:?}", args);
     let domain = &args[1];
 
     let nameserver = if args.len() < 3 {
