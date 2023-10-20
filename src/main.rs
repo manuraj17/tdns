@@ -405,6 +405,7 @@ fn decode_compressed_question_name(reader: &mut BuffReader) -> String {
     let mut parts: Vec<String> = Vec::new();
 
     loop {
+        // Taking first element because we are getting a vector back
         let length = reader.read(1)[0];
         if length == 0 {
             break;
